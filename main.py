@@ -50,16 +50,13 @@
 #      (0.254-0.260); MAD robust sigma (0.282); stronger k_down
 #      (2.0-3.0) and wider tails (all lose on the quiet half).
 #
-# Practice score (LOCAL scorer, see TESTS.md): loss 0.251601
-# (v3 baseline 0.256382, house baseline 0.363589), median error
-# 0.737078, coverage_90 0.912109. Per case: p00 0.396179, p01 0.296418,
-# p02 0.312752, p03 0.250120, p04 0.190891, p05 0.115382. Split-half:
-# volatile (p00-p02) 0.335116 vs v3's 0.348684; quiet (p03-p05)
-# 0.184554 vs v3's 0.182281. HONEST LIMIT: the 0.234 rank-50 target
-# is NOT reached -- every median lever beyond the sum correction loses
-# (LAD: conditional median ~0 for all price features), and the width
-# plateau is flat (0.2555-0.2564 across the whole sweep). The gap is
-# p00's regime break, which no causal price-only model can foresee.
+# Practice score (LOCAL scorer, see TESTS-v2.md): loss 0.249004
+# (v1 0.251601). Per case: p00 0.3948, p01 0.2981, p02 0.3121,
+# p03 0.2383, p04 0.1940, p05 0.1100. Split-half: volatile (p00-p02)
+# 0.334994 vs v1's 0.335116; quiet (p03-p05) 0.179969 vs v1's 0.184554.
+# HONEST LIMIT (unchanged): the 0.234 rank-50 target is NOT reached --
+# v2 gains 0.0026 in-sample, 0.0012 LOCO; the gap is still p00's regime
+# break, which no causal price-only model can foresee.
 #
 # Usage (mirrors the kit starter):
 #   mkdir -p out && MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
@@ -85,13 +82,68 @@ Z_INNER = 0.674490
 # Sigma estimation window: last 120 minutes of 1-minute prices.
 SIGMA_WINDOW = 120
 SIGMA_FLOOR = 0.0005
-SIGMA_CAP = 0.005
+# v2 (2026-11-16): SIGMA_CAP 0.005 -> 0.008, WIDTH_SCALE 0.95 -> 0.80.
+# Rationale (see TESTS-v2.md): v1's sigma cap binds exactly on the
+# markets that move most -- in p00, Jensen Huang (No Change) RMS-120 is
+# 0.01423 and Eric Schmidt 0.02181, both crushed to 0.005, while their
+# realized 240-min moves are 0.045/0.035. Pre-window RMS predicts
+# post-window |move| (corr +0.66 over 128 market-cases), so the cap was
+# discarding real signal. Raising the cap lets jumpy markets earn their
+# width from their own sigma; the global WIDTH_SCALE can then come down
+# (0.95 -> 0.80), which narrows the quiet markets that were paying for
+# the volatile ones' width. Both halves improve in-sample (vol 0.335116
+# -> 0.334994, quiet 0.184554 -> 0.179969) and LOCO confirms the family
+# (see TESTS-v2.md). Everything else is v1 unchanged, including the
+# sum-to-one gate (0.7-1.3) that keeps the median correction OFF on the
+# final's FAA family (sum ~0.11).
+#
+# Practice score (LOCAL scorer, dev/score.py, real entry outputs):
+# loss 0.242828 (v3 0.245955, v2 0.249004, v1 0.251601), median error
+# ~0.71, coverage_90 ~0.89. Per case: p00 0.3917, p01 0.2798,
+# p02 0.3079, p03 0.2383, p04 0.1829, p05 0.1084 -- beats locked v3 on
+# EVERY case. LOCO (family, dev/v4sweep2.py): v4 0.246584 vs v3 0.250173
+# (delta -0.003589, wins 5/6 folds). The 0.234 rank-50 target is STILL
+# not reached -- this is a real but small gain, not a breakthrough; the
+# honest limit stands (see TESTS-v4.md). p03's tail is FIXED (see below).
+#
+# v4 (2026-11-16): level gate on the give-back + stronger give-back.
+# (a) XGATE = 0.30: skip the give-back when the market's price x >= 0.30.
+#     Why (see TESTS-v4.md): v3's p03 tail is ONE market -- Ian Buck,
+#     x = 0.380 -- where the sum correction (which scales with x) had
+#     ALREADY faded the median by -0.0256 and the give-back stacked
+#     another -0.0175 on top, overshooting a market that then sat flat
+#     at -0.005 for 220 of 240 minutes. The give-back helps at EVERY
+#     price level below 0.30 (mean gain -0.0016 to -0.0807) and hurts
+#     only above it (n = 1, +0.3042). The threshold sits in a wide empty
+#     gap (0.285 kept, 0.380 gated). On the final's FAA family
+#     (x ~ 0.01-0.05) the gate NEVER fires, so it cannot hurt the final;
+#     it only guards the double-fade configuration.
+# (b) GIVEBACK_G 0.35 -> 0.45: with the tail guarded, the LOCO picks
+#     g = 0.45 in 4/6 folds, and on final-like markets (x < 0.05,
+#     sum correction forced OFF) the loss falls monotonically with g
+#     up to 0.50 (0.149599 at g=0 -> 0.148296 at g=0.50), so 0.45 is
+#     the LOCO-consistent choice, not an in-sample chase.
+#
+# v3 (2026-11-16): up-only give-back of the 60-min rise, GIVEBACK_G = 0.35,
+# accruing like the sum correction (1 - exp(-h/ACC_T)). Evidence (see
+# TESTS-v3.md): the 240-min move mean-reverts after RISES only --
+# corr(tr60, post_final) = -0.320, mean post_final -0.043 after a rise
+# >= 0.01 vs -0.003 after a fall >= 0.01. Symmetric give-back LOSES;
+# rises-only WINS. Everything else is v2 unchanged, including the
+# sum-to-one gate (0.7-1.3) that keeps the median correction OFF on the
+# final's FAA family (sum ~0.11).
+#
+SIGMA_CAP = 0.008
 # Price-scaled sigma floor: max(SIGMA_FLOOR, PFLOOR_C * sqrt(x*(1-x))).
 PFLOOR_C = 0.005
 # Horizon saturation: spread(h) = sigma * sqrt(h / (1 + h / SAT_T)).
 SAT_T = 120.0
-# Global width multiplier (calibrated on practice: 0.95 beats 1.0).
-WIDTH_SCALE = 0.95
+# Global width multiplier (v2: 0.80 -- recalibrated after the cap raise;
+# with cap 0.005, W had to stay high to compensate capped volatile
+# markets; with cap 0.008 the volatile markets get width from sigma, so
+# the global width can come down. W alone without the cap raise LOSES:
+# cap 0.005 + W 0.85 scores 0.252140, W 0.80 scores 0.252934).
+WIDTH_SCALE = 0.80
 # Outer (5%/95%) widening factor (calibrated: 1.0 beats 1.1).
 OUTER_WIDEN = 1.0
 # Inner (25%/75%) narrowing: b(h) = INNER_B0 + INNER_BGROW * h / horizon.
@@ -100,6 +152,14 @@ INNER_BGROW = 0.5
 # Trend-conditioned asymmetry: 60-minute trend window and side factor.
 TREND_WINDOW = 60
 TREND_A = 0.2
+# Give-back: revert a fraction of the 60-min trend move, rises only.
+# Symmetric give-back loses; falls do not bounce (see TESTS-v3.md).
+# v4: G 0.35 -> 0.45 (LOCO picks 0.45 in 4/6 folds once the tail is
+# guarded) and XGATE 0.30 (skip the give-back for high-price markets
+# where the sum correction has already faded the median -- see header).
+GIVEBACK_G = 0.45
+GIVEBACK_WINDOW = 60
+GIVEBACK_XGATE = 0.30
 # Sum-to-one median correction: asymmetric strength -- K_DOWN when the
 # family is overpriced (S > 1), K_UP when underpriced (S < 1).
 # Calibrated on practice: K_DOWN = 1.5, K_UP = 0.5 (symmetric k = 1
@@ -165,6 +225,21 @@ def forecast(market, horizon, sum_s=1.0):
         med_shift = -k * x * (sum_s - 1.0) / sum_s
     else:
         med_shift = 0.0
+    # v3 give-back (rises only): revert GIVEBACK_G of the 60-min rise.
+    # Falls do NOT bounce, so a negative trend contributes nothing.
+    # Accrues with the same (1 - exp(-h/ACC_T)) shape as the sum
+    # correction. See TESTS-v3.md for the evidence.
+    if len(prices) > GIVEBACK_WINDOW:
+        rise = x - prices[-1 - GIVEBACK_WINDOW]
+    else:
+        rise = 0.0
+    # v4 level gate: a high-price market's median is already faded by
+    # the sum correction (which scales with x); stacking the give-back
+    # on top double-fades it. Skip the give-back there. Never fires on
+    # the final's FAA family (x ~ 0.01-0.05).
+    if x >= GIVEBACK_XGATE:
+        rise = 0.0
+    giveback = -GIVEBACK_G * rise if rise > 0.0 else 0.0
     rows = []
     for h in range(1, horizon + 1):
         frac = h / float(horizon)
@@ -173,7 +248,7 @@ def forecast(market, horizon, sum_s=1.0):
         b = INNER_B0 + INNER_BGROW * frac
         z = (-Z_OUTER * OUTER_WIDEN * lo_m, -Z_INNER * b * lo_m, 0.0,
              Z_INNER * b * hi_m, Z_OUTER * OUTER_WIDEN * hi_m)
-        med = x + med_shift * acc
+        med = x + med_shift * acc + giveback * acc
         rows.append([price6(med + zi * spread) for zi in z])
     return rows
 
